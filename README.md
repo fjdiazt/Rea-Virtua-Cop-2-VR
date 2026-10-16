@@ -32,13 +32,39 @@ level up. Create a `PROJECT` folder inside the game folder, copy every file
 from the game folder into it (files only, `BIN` stays where it is), copy the
 mod in there too, and run everything from `PROJECT`.
 
+### Optional music without a mounted disc
+
+The original game plays music from CD audio tracks. Its `SE` folder contains
+sound effects, not the CD music. To play music from files:
+
+1. Rip your own disc to a **single-BIN, 2352-byte/sector CUE image** with
+   track 01 marked `MODE1/2352`. For an existing CUE/BIN pair, keep both files
+   together.
+2. From the game root, run
+   `python PROJECT\audio\extract_music.py "C:\path\to\disc.cue" MUSIC` if the
+   mod is in `PROJECT`. If the mod is in a separate `VR` folder, use
+   `VR\audio\extract_music.py` instead. The output is `MUSIC\Track02.wav`,
+   `Track03.wav`, and so on; track 01 is game data. The output folder must not
+   already exist. Python 3 is required for this extraction step.
+3. Copy `audio\winmm.dll` from the mod release beside **`PPJ2DD.EXE`**. With
+   the usual layout, that is `PROJECT\winmm.dll`, even if `VC2VR.exe` lives in
+   `VR`. Keep the original `SE` files where they are.
+4. With no disc mounted, set `launchfix = 1` in `VC2VR.ini` and start the game
+   through `VC2VR.exe`. This CD-check bypass works only with recognized game
+   executables; it leaves the file on disk unchanged.
+
+The file-audio wrapper reads `MUSIC` beside `PROJECT`. For installs without a
+`PROJECT` folder, put `MUSIC` beside `PPJ2DD.EXE`. `PROJECT\Music` still works
+if `MUSIC` beside `PROJECT` is absent. To return to CD audio, remove the
+optional `winmm.dll` from beside `PPJ2DD.EXE` and mount the disc.
+
 ## Running
 
 1. Start your VR runtime.
 2. Run `VC2VR.exe`. It starts the game, switches it to the mod's renderer and
    to windowed mode (`vcop2.ini`), brings the game window to the front and
-   connects. Full-screen mode does not work with the mod. Keep the game's
-   disc image mounted - the music comes from it.
+   connects. Full-screen mode does not work with the mod. Music comes from
+   the mounted disc or the optional extracted tracks above.
 3. Put the headset on facing your monitor - the first head pose becomes the
    camera. Squeeze the grip to recentre at any time.
 
@@ -75,7 +101,7 @@ machinery, HUD. Both files are short and commented.
 `launchfix = 1` optionally bypasses the game's CD check when `VC2VR.exe` starts
 a recognized `PPJ2DD.EXE`, including the EU/PAL 1.0.0.2 code layout. The patch
 is in memory only; starting `PPJ2DD.EXE` directly skips it. Leave this off when
-the disc is mounted, and keep the disc mounted for music.
+the disc is mounted. Extracted music also needs the optional file-audio wrapper.
 
 ## Rendering glitches
 
