@@ -39,8 +39,7 @@ sound effects, not the CD music. To play music from files:
 
 1. Rip your own disc to a **single-BIN, 2352-byte/sector CUE image** with
    track 01 marked `MODE1/2352`. For an existing CUE/BIN pair, keep both files
-   together. Check that the CUE also lists `TRACK 02 AUDIO`. The tested 2001
-   Xplosiv disc has only one data track, so it cannot supply CD music files.
+   together.
 2. From the game root, run
    `python PROJECT\audio\extract_music.py "C:\path\to\disc.cue" MUSIC` if the
    mod is in `PROJECT`. If the mod is in a separate `VR` folder, use
