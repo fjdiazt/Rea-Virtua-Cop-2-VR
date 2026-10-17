@@ -3916,6 +3916,49 @@ static void menuClearConsole(void)
 
 static HANDLE g_menuConsole;
 static WORD g_menuNormalColor;
+static SRWLOCK g_menuDrawLock = SRWLOCK_INIT;
+static HANDLE g_menuStarStop, g_menuStarThread;
+static COORD g_menuStarPosition;
+static int g_menuStarVisible;
+
+static DWORD WINAPI menuStarLoop(void *unused)
+{
+    static const char glyph[] = {'+', '*', 'x', '*'};
+    static const WORD ink[] = {
+        FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY,
+        FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE | FOREGROUND_INTENSITY,
+        FOREGROUND_RED | FOREGROUND_INTENSITY,
+        FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE | FOREGROUND_INTENSITY
+    };
+    COORD size = {1, 1}, origin = {0, 0};
+    CHAR_INFO cell;
+    SMALL_RECT target;
+    int frame = 0;
+    (void)unused;
+    while (WaitForSingleObject(g_menuStarStop, 160) == WAIT_TIMEOUT) {
+        AcquireSRWLockExclusive(&g_menuDrawLock);
+        if (g_menuStarVisible) {
+            target.Left = target.Right = g_menuStarPosition.X;
+            target.Top = target.Bottom = g_menuStarPosition.Y;
+            cell.Char.AsciiChar = glyph[frame];
+            cell.Attributes = (g_menuNormalColor & 0xfff0) | ink[frame];
+            WriteConsoleOutputA(g_menuConsole, &cell, size, origin, &target);
+        }
+        ReleaseSRWLockExclusive(&g_menuDrawLock);
+        frame = (frame + 1) % 4;
+    }
+    return 0;
+}
+
+static void menuStopStar(void)
+{
+    if (!g_menuStarThread) return;
+    SetEvent(g_menuStarStop);
+    WaitForSingleObject(g_menuStarThread, INFINITE);
+    CloseHandle(g_menuStarThread);
+    CloseHandle(g_menuStarStop);
+    g_menuStarThread = g_menuStarStop = NULL;
+}
 
 static void menuColor(WORD foreground)
 {
@@ -3949,6 +3992,8 @@ static void menuHeader(int animate, int wantWindow, int wantStereo)
         FOREGROUND_RED | FOREGROUND_INTENSITY
     };
     static const char spin[] = {'|', '/', '-', '\\', '+'};
+    static const char reticle[] = "                   --==[ ";
+    CONSOLE_SCREEN_BUFFER_INFO info;
     int i;
 
     printf("\n");
@@ -3958,16 +4003,21 @@ static void menuHeader(int animate, int wantWindow, int wantStereo)
         if (animate && g_menuConsole) { fflush(stdout); Sleep(35); }
     }
     menuColor(FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY);
+    if (g_menuConsole && GetConsoleScreenBufferInfo(g_menuConsole, &info) &&
+        info.dwSize.X >= 64 && info.dwSize.Y >= 24) {
+        g_menuStarPosition.X = (SHORT)(sizeof(reticle) - 1);
+        g_menuStarPosition.Y = info.dwCursorPosition.Y;
+        g_menuStarVisible = 1;
+    }
     if (animate && g_menuConsole) {
         for (i = 0; i < 5; i++) {
-            printf("\r                   --==[ %c ]==--  V R  E D I T I O N",
-                   spin[i]);
+            printf("\r%s%c ]==--  V R  E D I T I O N", reticle, spin[i]);
             fflush(stdout);
             Sleep(65);
         }
         printf("\n");
     } else {
-        printf("                   --==[ + ]==--  V R  E D I T I O N\n");
+        printf("%s+ ]==--  V R  E D I T I O N\n", reticle);
     }
     menuColor(FOREGROUND_RED | FOREGROUND_INTENSITY);
     printf("   -----------------------------------------------------------\n");
@@ -3988,8 +4038,19 @@ static int startupMenu(int *wantWindow, int *wantStereo)
     if (GetConsoleScreenBufferInfo(g_menuConsole, &info))
         g_menuNormalColor = info.wAttributes;
     else g_menuConsole = NULL;
+    g_menuStarVisible = 0;
+    if (g_menuConsole) {
+        g_menuStarStop = CreateEventA(NULL, TRUE, FALSE, NULL);
+        if (g_menuStarStop)
+            g_menuStarThread = CreateThread(NULL, 0, menuStarLoop, NULL, 0, NULL);
+        if (!g_menuStarThread && g_menuStarStop) {
+            CloseHandle(g_menuStarStop);
+            g_menuStarStop = NULL;
+        }
+    }
     menuClearConsole();
     for (;;) {
+        AcquireSRWLockExclusive(&g_menuDrawLock);
         menuHeader(page != shownPage, *wantWindow, *wantStereo);
         shownPage = page;
         if (page == 0) {
@@ -4046,15 +4107,22 @@ static int startupMenu(int *wantWindow, int *wantStereo)
         printf("   Select > ");
         menuResetColor();
         fflush(stdout);
+        ReleaseSRWLockExclusive(&g_menuDrawLock);
         choice = menuReadChoice();
         if (choice == -1) {
+            menuStopStar();
             note("menu: input unavailable; starting with configured choices\n");
             return 1;
         }
+        AcquireSRWLockExclusive(&g_menuDrawLock);
+        g_menuStarVisible = 0;
         menuClearConsole();
+        ReleaseSRWLockExclusive(&g_menuDrawLock);
         if (page == 0) {
-            if (choice == 1) return 1;
-            if (choice == 0) return 0;
+            if (choice == 1 || choice == 0) {
+                menuStopStar();
+                return choice == 1;
+            }
             if (choice >= 2 && choice <= 5) page = choice - 1;
         } else if (choice == 0) page = 0;
         else if (page == 1) {
