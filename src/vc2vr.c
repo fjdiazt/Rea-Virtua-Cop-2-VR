@@ -3906,30 +3906,49 @@ static int startupMenu(int *wantWindow, int *wantStereo)
     int page = 0, choice, next;
     for (;;) {
         if (page == 0)
-            printf("\nVC2VR startup\n1) Start\n2) Cheats\n3) Display\n"
-                   "4) Controls\n5) Advanced\n0) Quit\n> ");
+            printf("\n"
+                   "   __     ___ ____ _____ _   _   _      ____ ___  ____    ____\n"
+                   "   \\ \\   / (_)  _ \\_   _| | | | / \\    / ___/ _ \\|  _ \\  |___ \\\n"
+                   "    \\ \\ / /| | |_) || | | | | |/ _ \\  | |  | | | | |_) |   __) |\n"
+                   "     \\ V / | |  _ < | | | |_| / ___ \\ | |__| |_| |  __/   / __/\n"
+                   "      \\_/  |_|_| \\_\\|_|  \\___/_/   \\_\\ \\____\\___/|_|     |_____|\n"
+                   "                   --==[ + ]==--  V R  E D I T I O N\n"
+                   "   -----------------------------------------------------------\n"
+                   "     [1] START GAME\n\n"
+                   "     [2] Cheats                 [3] Display\n"
+                   "     [4] Controls               [5] Advanced\n\n"
+                   "     [0] Quit\n"
+                   "   -----------------------------------------------------------\n"
+                   "   Select > ");
         else if (page == 1)
-            printf("\nCheats\n1) Infinite ammo: %s\n2) Infinite lives: %s\n"
-                   "0) Back\n> ",
+            printf("\n   -- CHEATS -----------------------------------------------\n"
+                   "     [1] Infinite ammo: %s\n     [2] Infinite lives: %s\n"
+                   "\n     [0] Back\n   Select > ",
                    (g_cheatFlags & VC2_CHEAT_AMMO) ? "ON" : "OFF",
                    (g_cheatFlags & VC2_CHEAT_LIVES) ? "ON" : "OFF");
         else if (page == 2)
-            printf("\nDisplay\n1) Mode: %s\n2) MSAA: %d\n"
-                   "3) Resolution scale: %d%%\n4) Gamma: %d%%\n"
-                   "5) Monitor window: %s\n0) Back\n> ",
+            printf("\n   -- DISPLAY ----------------------------------------------\n"
+                   "     [1] Mode: %s\n     [2] MSAA: %d\n"
+                   "     [3] Resolution scale: %d%%\n     [4] Gamma: %d%%\n"
+                   "     [5] Monitor window: %s\n"
+                   "\n     [0] Back\n   Select > ",
                    *wantStereo ? "Stereo" : *wantWindow ? "Window" : "VR",
                    g_cfgMsaa, g_cfgSuper, g_cfgGamma, g_viewWindow ? "ON" : "OFF");
         else if (page == 3)
-            printf("\nControls\n1) Two guns: %s\n2) Haptics: %s\n"
-                   "3) Auto zoom: %s\n4) Zoom limit: %d%%\n0) Back\n> ",
+            printf("\n   -- CONTROLS ---------------------------------------------\n"
+                   "     [1] Two guns: %s\n     [2] Haptics: %s\n"
+                   "     [3] Auto zoom: %s\n     [4] Zoom limit: %d%%\n"
+                   "\n     [0] Back\n   Select > ",
                    (g_cfgAkimbo && g_viewAkimbo) ? "ON" : "OFF",
                    g_cfgHaptic ? "ON" : "OFF",
                    g_cfgAutoZoom ? "ON" : "OFF", g_cfgZoomX);
         else
-            printf("\nAdvanced\n1) Launchfix: %s\n2) Menu at launch: %s\n"
-                   "3) Brightness: %d%%\n"
-                   "Crosshairs, world scale, 360 passes, gun model: edit INI files\n"
-                   "0) Back\n> ",
+            printf("\n   -- ADVANCED ---------------------------------------------\n"
+                   "     [1] Launchfix: %s\n     [2] Menu at launch: %s\n"
+                   "     [3] Brightness: %d%%\n\n"
+                   "     Crosshairs, world scale, 360 passes, gun model:\n"
+                   "     edit INI files\n"
+                   "\n     [0] Back\n   Select > ",
                    g_cfgNoCd ? "ON" : "OFF", g_cfgMenu ? "ON" : "OFF",
                    g_viewTexGain);
         fflush(stdout);
