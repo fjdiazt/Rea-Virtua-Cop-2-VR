@@ -4033,7 +4033,7 @@ static void menuHeader(int animate, int wantWindow, int wantStereo)
 static int startupMenu(int *wantWindow, int *wantStereo)
 {
     CONSOLE_SCREEN_BUFFER_INFO info;
-    int page = 0, shownPage = -1, choice, next;
+    int page = 0, firstDraw = 1, choice, next;
     g_menuConsole = GetStdHandle(STD_OUTPUT_HANDLE);
     if (GetConsoleScreenBufferInfo(g_menuConsole, &info))
         g_menuNormalColor = info.wAttributes;
@@ -4051,8 +4051,8 @@ static int startupMenu(int *wantWindow, int *wantStereo)
     menuClearConsole();
     for (;;) {
         AcquireSRWLockExclusive(&g_menuDrawLock);
-        menuHeader(page != shownPage, *wantWindow, *wantStereo);
-        shownPage = page;
+        menuHeader(firstDraw, *wantWindow, *wantStereo);
+        firstDraw = 0;
         if (page == 0) {
             menuColor(FOREGROUND_GREEN | FOREGROUND_INTENSITY);
             printf("\n     [1] START GAME\n");
