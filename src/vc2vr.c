@@ -44,6 +44,8 @@
 #include <d3dcompiler.h>
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 #define XR_USE_PLATFORM_WIN32
 #define XR_USE_GRAPHICS_API_D3D11
@@ -187,6 +189,10 @@ static int  g_cfgSetDevice = 1;       /* [vr] setdevice: write vcop2.ini for the
 static int g_cfgNoPause = 1;      /* patch the game so losing focus does not pause it */
 static int g_cfgNoCd = 0;         /* [vr] launchfix: in-memory compatibility patches at launch */
 static unsigned g_cheatFlags;     /* per-launch cheats; off unless requested */
+static int g_cfgMenu, g_cfgWindow, g_cfgStereo;
+static int g_viewWindow, g_viewAkimbo, g_viewTexGain = 100;
+static char g_vrIniPath[MAX_PATH], g_viewIniPath[MAX_PATH];
+static char g_vrBackup[MAX_PATH + 64], g_viewBackup[MAX_PATH + 64];
 static int g_cfgScope;            /* 1 = optic on the gun, 0 = magnify the whole view */
 static int g_cfgScopeDeg = 12;    /* angular radius of the disc, degrees */
 static int g_cfgScopeDist = 25;   /* how far out the head-locked disc hangs, m */
@@ -202,7 +208,7 @@ static int  g_cfgReloadMs = 180;  /* reload flick, ms */
 
 static void loadCfg(void)
 {
-    char path[MAX_PATH];
+    char *path = g_vrIniPath;
     DWORD n = GetModuleFileNameA(NULL, path, MAX_PATH);
     while (n > 0 && path[n - 1] != '\\') n--;
     lstrcpyA(path + n, "VC2VR.ini");
@@ -227,6 +233,13 @@ static void loadCfg(void)
     g_cfgSetDevice = (int)GetPrivateProfileIntA("vr", "setdevice", 1, path);
     g_cfgNoPause   = (int)GetPrivateProfileIntA("vr", "nopause", 0, path);
     g_cfgNoCd      = (int)GetPrivateProfileIntA("vr", "launchfix", 0, path);
+    g_cfgMenu      = (int)GetPrivateProfileIntA("vr", "menu", 0, path);
+    g_cfgWindow    = (int)GetPrivateProfileIntA("vr", "window", 0, path);
+    g_cfgStereo    = (int)GetPrivateProfileIntA("vr", "stereo", 0, path);
+    if (GetPrivateProfileIntA("vr", "infinite_ammo", 0, path))
+        g_cheatFlags |= VC2_CHEAT_AMMO;
+    if (GetPrivateProfileIntA("vr", "infinite_lives", 0, path))
+        g_cheatFlags |= VC2_CHEAT_LIVES;
     g_cfgScope     = (int)GetPrivateProfileIntA("vr", "scope", 0, path);
     g_cfgScopeDeg  = (int)GetPrivateProfileIntA("vr", "scopesize", 12, path);
     g_cfgScopeDist = (int)GetPrivateProfileIntA("vr", "scopedist", 25, path);
@@ -539,6 +552,20 @@ static void gameSeek(void)
         if (gameTry(dir, g_cfgGameExe)) break;
     } while (FindNextFileA(h, &fd));
     FindClose(h);
+}
+
+static void menuViewCfg(void)
+{
+    char *slash = NULL, *p;
+    if (!g_cfgGameExe[0]) return;
+    lstrcpynA(g_viewIniPath, g_cfgGameExe, MAX_PATH);
+    for (p = g_viewIniPath; *p; p++) if (*p == '\\' || *p == '/') slash = p;
+    if (!slash || slash - g_viewIniPath > MAX_PATH - 14) { g_viewIniPath[0] = 0; return; }
+    lstrcpyA(slash + 1, "HGL_VIEW.ini");
+    if (!fileThere(g_viewIniPath)) { g_viewIniPath[0] = 0; return; }
+    g_viewWindow  = (int)GetPrivateProfileIntA("view", "window", 0, g_viewIniPath);
+    g_viewAkimbo  = (int)GetPrivateProfileIntA("view", "akimbo", 0, g_viewIniPath);
+    g_viewTexGain = (int)GetPrivateProfileIntA("view", "texgain", 100, g_viewIniPath);
 }
 
 /* The renderer is chosen in the game's own vcop2.ini, and picking it by hand -
@@ -3786,17 +3813,232 @@ static int runStereo(void)
     }
 }
 
+static int menuBackup(const char *path, char *backup)
+{
+    SYSTEMTIME t;
+    if (path == g_viewIniPath && g_gameProc) {
+        note("menu: close the game before changing HGL_VIEW.ini\n");
+        return 0;
+    }
+    if (!path[0] || !fileThere(path)) {
+        note("menu: INI unavailable: %s\n", path[0] ? path : "HGL_VIEW.ini");
+        return 0;
+    }
+    if (backup[0]) return 1;
+    GetLocalTime(&t);
+    wsprintfA(backup, "%s.menu-%04u%02u%02u-%02u%02u%02u-%lu.bak", path,
+              t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond,
+              (unsigned long)GetCurrentProcessId());
+    if (!CopyFileA(path, backup, TRUE)) {
+        note("menu: backup failed (%lu); setting unchanged\n",
+             (unsigned long)GetLastError());
+        backup[0] = 0;
+        return 0;
+    }
+    note("menu: backed up %s\n", backup);
+    return 1;
+}
+
+static int menuWrite(const char *path, const char *section, const char *key, int value)
+{
+    char text[16];
+    wsprintfA(text, "%d", value);
+    if (WritePrivateProfileStringA(section, key, text, path)) return 1;
+    note("menu: cannot save %s (%lu)\n", key, (unsigned long)GetLastError());
+    return 0;
+}
+
+static int menuSave(const char *path, char *backup, const char *section,
+                    const char *key, int value)
+{
+    return menuBackup(path, backup) && menuWrite(path, section, key, value);
+}
+
+static int menuSavePair(const char *path, char *backup, const char *section,
+                        const char *key1, int value1, const char *key2, int value2)
+{
+    int old = (int)GetPrivateProfileIntA(section, key1, 0, path);
+    if (!menuSave(path, backup, section, key1, value1)) return 0;
+    if (menuWrite(path, section, key2, value2)) return 1;
+    menuWrite(path, section, key1, old);
+    return 0;
+}
+
+static int menuReadChoice(void)
+{
+    char line[32];
+    int c;
+    if (!fgets(line, sizeof(line), stdin)) return -1;
+    if (line[0] >= '0' && line[0] <= '9' &&
+        (line[1] == '\n' || line[1] == '\0' ||
+         (line[1] == '\r' && (line[2] == '\n' || line[2] == '\0'))))
+        return line[0] - '0';
+    if (!strchr(line, '\n')) while ((c = getchar()) != '\n' && c != EOF) {}
+    return -2;
+}
+
+static int menuReadNumber(const char *label, int min, int max, int *result)
+{
+    char line[32], *end;
+    long value;
+    int c;
+    printf("%s (%d-%d, blank cancels): ", label, min, max);
+    fflush(stdout);
+    if (!fgets(line, sizeof(line), stdin)) return 0;
+    if (!strchr(line, '\n') && !feof(stdin)) {
+        while ((c = getchar()) != '\n' && c != EOF) {}
+        return 0;
+    }
+    if (line[0] == '\n' || line[0] == '\r') return 0;
+    value = strtol(line, &end, 10);
+    if (end == line || (*end != '\n' && *end != '\0' &&
+                        !(*end == '\r' && (end[1] == '\n' || end[1] == '\0'))) ||
+        value < min || value > max) {
+        note("menu: value out of range\n");
+        return 0;
+    }
+    *result = (int)value;
+    return 1;
+}
+
+static int startupMenu(int *wantWindow, int *wantStereo)
+{
+    int page = 0, choice, next;
+    for (;;) {
+        if (page == 0)
+            printf("\nVC2VR startup\n1) Start\n2) Cheats\n3) Display\n"
+                   "4) Controls\n5) Advanced\n0) Quit\n> ");
+        else if (page == 1)
+            printf("\nCheats\n1) Infinite ammo: %s\n2) Infinite lives: %s\n"
+                   "0) Back\n> ",
+                   (g_cheatFlags & VC2_CHEAT_AMMO) ? "ON" : "OFF",
+                   (g_cheatFlags & VC2_CHEAT_LIVES) ? "ON" : "OFF");
+        else if (page == 2)
+            printf("\nDisplay\n1) Mode: %s\n2) MSAA: %d\n"
+                   "3) Resolution scale: %d%%\n4) Gamma: %d%%\n"
+                   "5) Monitor window: %s\n0) Back\n> ",
+                   *wantStereo ? "Stereo" : *wantWindow ? "Window" : "VR",
+                   g_cfgMsaa, g_cfgSuper, g_cfgGamma, g_viewWindow ? "ON" : "OFF");
+        else if (page == 3)
+            printf("\nControls\n1) Two guns: %s\n2) Haptics: %s\n"
+                   "3) Auto zoom: %s\n4) Zoom limit: %d%%\n0) Back\n> ",
+                   (g_cfgAkimbo && g_viewAkimbo) ? "ON" : "OFF",
+                   g_cfgHaptic ? "ON" : "OFF",
+                   g_cfgAutoZoom ? "ON" : "OFF", g_cfgZoomX);
+        else
+            printf("\nAdvanced\n1) Launchfix: %s\n2) Menu at launch: %s\n"
+                   "3) Brightness: %d%%\n"
+                   "Crosshairs, world scale, 360 passes, gun model: edit INI files\n"
+                   "0) Back\n> ",
+                   g_cfgNoCd ? "ON" : "OFF", g_cfgMenu ? "ON" : "OFF",
+                   g_viewTexGain);
+        fflush(stdout);
+        choice = menuReadChoice();
+        if (choice == -1) {
+            note("menu: input unavailable; starting with configured choices\n");
+            return 1;
+        }
+        if (page == 0) {
+            if (choice == 1) return 1;
+            if (choice == 0) return 0;
+            if (choice >= 2 && choice <= 5) page = choice - 1;
+        } else if (choice == 0) page = 0;
+        else if (page == 1) {
+            if (choice == 1 || choice == 2) {
+                unsigned flag = choice == 1 ? VC2_CHEAT_AMMO : VC2_CHEAT_LIVES;
+                const char *key = choice == 1 ? "infinite_ammo" : "infinite_lives";
+                next = !(g_cheatFlags & flag);
+                if (menuSave(g_vrIniPath, g_vrBackup, "vr", key, next))
+                    g_cheatFlags ^= flag;
+            }
+        } else if (page == 2) {
+            if (choice == 1) {
+                int window = *wantStereo ? 0 : *wantWindow ? 0 : 1;
+                int stereo = *wantWindow ? 1 : 0;
+                if (menuSavePair(g_vrIniPath, g_vrBackup, "vr",
+                                 "window", window, "stereo", stereo)) {
+                    *wantWindow = window;
+                    *wantStereo = stereo;
+                }
+            } else if (choice == 2) {
+                next = g_cfgMsaa < 2 ? 2 : g_cfgMsaa < 4 ? 4 :
+                       g_cfgMsaa < 8 ? 8 : 1;
+                if (menuSave(g_vrIniPath, g_vrBackup, "vr", "msaa", next))
+                    g_cfgMsaa = next;
+            } else if (choice == 3 &&
+                       menuReadNumber("Resolution scale", 50, 250, &next) &&
+                       menuSave(g_vrIniPath, g_vrBackup, "vr", "supersample", next))
+                g_cfgSuper = next;
+            else if (choice == 4 &&
+                     menuReadNumber("Gamma", 100, 300, &next) &&
+                     menuSave(g_vrIniPath, g_vrBackup, "vr", "gamma", next))
+                g_cfgGamma = next;
+            else if (choice == 5) {
+                next = !g_viewWindow;
+                if (menuSave(g_viewIniPath, g_viewBackup, "view", "window", next))
+                    g_viewWindow = next;
+            }
+        } else if (page == 3) {
+            if (choice == 1) {
+                int old = (int)GetPrivateProfileIntA("vr", "akimbo", 0, g_vrIniPath);
+                next = !(g_cfgAkimbo && g_viewAkimbo);
+                if (menuBackup(g_vrIniPath, g_vrBackup) &&
+                    menuBackup(g_viewIniPath, g_viewBackup) &&
+                    menuWrite(g_vrIniPath, "vr", "akimbo", next)) {
+                    if (menuWrite(g_viewIniPath, "view", "akimbo", next))
+                        g_cfgAkimbo = g_viewAkimbo = next;
+                    else menuWrite(g_vrIniPath, "vr", "akimbo", old);
+                }
+            } else if (choice == 2) {
+                next = !g_cfgHaptic;
+                if (menuSave(g_vrIniPath, g_vrBackup, "vr", "haptic", next))
+                    g_cfgHaptic = next;
+            } else if (choice == 3) {
+                next = !g_cfgAutoZoom;
+                if (menuSave(g_vrIniPath, g_vrBackup, "vr", "autozoom", next))
+                    g_cfgAutoZoom = next;
+            } else if (choice == 4 &&
+                       menuReadNumber("Zoom limit", 110, 1200, &next) &&
+                       menuSave(g_vrIniPath, g_vrBackup, "vr", "zoom", next))
+                g_cfgZoomX = next;
+        } else if (page == 4) {
+            if (choice == 1) {
+                next = !g_cfgNoCd;
+                if (menuSave(g_vrIniPath, g_vrBackup, "vr", "launchfix", next))
+                    g_cfgNoCd = next;
+            } else if (choice == 2) {
+                next = !g_cfgMenu;
+                if (menuSave(g_vrIniPath, g_vrBackup, "vr", "menu", next))
+                    g_cfgMenu = next;
+            } else if (choice == 3 &&
+                       menuReadNumber("Brightness", 25, 400, &next) &&
+                       menuSave(g_viewIniPath, g_viewBackup, "view", "texgain", next))
+                g_viewTexGain = next;
+        }
+    }
+}
+
 int main(int argc, char **argv)
 {
-    int wantWindow = 0, wantStereo = 0, i;
+    int wantWindow, wantStereo, wantMenu, cliWindow = 0, cliStereo = 0, i;
+    loadCfg();
+    wantWindow = g_cfgWindow;
+    wantStereo = g_cfgStereo;
+    wantMenu = g_cfgMenu;
     for (i = 1; i < argc; i++) {
-        if (!lstrcmpiA(argv[i], "--window")) wantWindow = 1;
-        if (!lstrcmpiA(argv[i], "--stereo")) wantStereo = 1;
+        if (!lstrcmpiA(argv[i], "--window")) cliWindow = 1;
+        if (!lstrcmpiA(argv[i], "--stereo")) cliStereo = 1;
+        if (!lstrcmpiA(argv[i], "--menu")) wantMenu = 1;
         if (!lstrcmpiA(argv[i], "--infinite-ammo")) g_cheatFlags |= VC2_CHEAT_AMMO;
         if (!lstrcmpiA(argv[i], "--infinite-lives")) g_cheatFlags |= VC2_CHEAT_LIVES;
     }
-
-    loadCfg();
+    if (cliWindow || cliStereo) { wantWindow = cliWindow; wantStereo = cliStereo; }
+    if (wantMenu) {
+        gameSeek();
+        gameProcFind();
+        menuViewCfg();
+        if (!startupMenu(&wantWindow, &wantStereo)) return 0;
+    }
     note("VC2VR - Virtua Cop 2 in a headset\n\n");
     /* Start the game BEFORE the wait, not from the frame loop. gameLaunch sat
      * in gameProjRead, which only runs once we are already connected - so with
