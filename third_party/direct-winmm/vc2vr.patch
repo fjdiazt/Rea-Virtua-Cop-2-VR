@@ -1,0 +1,50 @@
+diff --git a/WinmmStubs/AudioEngineAdapter.cpp b/WinmmStubs/AudioEngineAdapter.cpp
+index 411fbb7..4f0adeb 100644
+--- a/WinmmStubs/AudioEngineAdapter.cpp
++++ b/WinmmStubs/AudioEngineAdapter.cpp
+@@ -161,6 +161,13 @@ namespace {
+     static void InitializeTrackPath() {
+         if (gPathFormatDetected) return; // Already detected
+ 
++        wchar_t currentDir[MAX_PATH];
++        DWORD dirLength = GetCurrentDirectoryW(MAX_PATH, currentDir);
++        if (dirLength && dirLength < MAX_PATH &&
++            lstrcmpiW(PathFindFileNameW(currentDir), L"PROJECT") == 0) {
++            gPathFormat = L"..\\MUSIC\\Track%02d";
++        }
++
+         // Reset track file type index and track count before detection
+         ZeroMemory(gTrackFileType, sizeof(gTrackFileType));
+         gCountTracks = 0;
+diff --git a/WinmmStubs/WinmmStubs.vcxproj b/WinmmStubs/WinmmStubs.vcxproj
+index 3badbf4..8b400d3 100644
+--- a/WinmmStubs/WinmmStubs.vcxproj
++++ b/WinmmStubs/WinmmStubs.vcxproj
+@@ -74,16 +74,16 @@
+     <TargetName>winmm</TargetName>
+     <LinkIncremental>false</LinkIncremental>
+     <IgnoreImportLibrary>true</IgnoreImportLibrary>
+-    <IncludePath>$(VC_IncludePath);$(WindowsSdk_71A_IncludePath);$(DXSDK_DIR)include;$(SolutionDir)include;</IncludePath>
+-    <LibraryPath>$(VC_LibraryPath_x86);$(WindowsSdk_71A_LibraryPath_x86);$(DXSDK_DIR)Lib\$(PlatformTarget);$(SolutionDir)lib\$(Configuration);</LibraryPath>
++    <IncludePath>$(VC_IncludePath);$(WindowsSDK_IncludePath);$(DXSDK_DIR)include;$(SolutionDir)include;</IncludePath>
++    <LibraryPath>$(VC_LibraryPath_x86);$(WindowsSDK_LibraryPath_x86);$(DXSDK_DIR)Lib\$(PlatformTarget);$(SolutionDir)lib\$(Configuration);</LibraryPath>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
+     <GenerateManifest>false</GenerateManifest>
+     <TargetName>winmm</TargetName>
+     <LinkIncremental>false</LinkIncremental>
+     <IgnoreImportLibrary>true</IgnoreImportLibrary>
+-    <IncludePath>$(VC_IncludePath);$(WindowsSdk_71A_IncludePath);$(DXSDK_DIR)include;$(SolutionDir)include;</IncludePath>
+-    <LibraryPath>$(VC_LibraryPath_x86);$(WindowsSdk_71A_LibraryPath_x86);$(DXSDK_DIR)Lib\$(PlatformTarget);$(SolutionDir)lib\$(Configuration);</LibraryPath>
++    <IncludePath>$(VC_IncludePath);$(WindowsSDK_IncludePath);$(DXSDK_DIR)include;$(SolutionDir)include;</IncludePath>
++    <LibraryPath>$(VC_LibraryPath_x86);$(WindowsSDK_LibraryPath_x86);$(DXSDK_DIR)Lib\$(PlatformTarget);$(SolutionDir)lib\$(Configuration);</LibraryPath>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+     <GenerateManifest>false</GenerateManifest>
+@@ -260,4 +260,4 @@
+   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+   <ImportGroup Label="ExtensionTargets">
+   </ImportGroup>
+-</Project>
+\ No newline at end of file
++</Project>
