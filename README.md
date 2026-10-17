@@ -54,9 +54,14 @@ the first changed INI. Quitting the menu does not undo saved choices.
 Close `PPJ2DD.EXE` before changing game-side settings in the menu.
 
 All command-line choices also have `VC2VR.ini` defaults: `window`, `stereo`,
-`infinite_ammo`, and `infinite_lives`. `--menu` has `menu`. Command-line flags
+`infinite_ammo`, `infinite_lives`, and `exitwithgame`. `--menu` has `menu`. Command-line flags
 enable their choice for that run; the menu can change the result and save it.
 The `window` key in `HGL_VIEW.ini` controls the separate monitor view.
+
+Advanced > Exit with game, `[vr] exitwithgame = 1`, or `--exit-with-game` closes
+VC2VR after the connected `PPJ2DD.EXE` exits. This works for games started by
+VC2VR and games already running. It is off by default; the command-line flag
+can be combined with cheat flags.
 
 ## Optional cheats
 
