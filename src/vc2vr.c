@@ -3914,57 +3914,137 @@ static void menuClearConsole(void)
     SetConsoleCursorPosition(output, origin);
 }
 
+static HANDLE g_menuConsole;
+static WORD g_menuNormalColor;
+
+static void menuColor(WORD foreground)
+{
+    if (!g_menuConsole) return;
+    fflush(stdout);
+    SetConsoleTextAttribute(g_menuConsole,
+                            (g_menuNormalColor & 0xfff0) | foreground);
+}
+
+static void menuResetColor(void)
+{
+    if (!g_menuConsole) return;
+    fflush(stdout);
+    SetConsoleTextAttribute(g_menuConsole, g_menuNormalColor);
+}
+
+static void menuHeader(int animate, int wantWindow, int wantStereo)
+{
+    static const char *const art[] = {
+        "   __     ___ ____ _____ _   _   _      ____ ___  ____    ____",
+        "   \\ \\   / (_)  _ \\_   _| | | | / \\    / ___/ _ \\|  _ \\  |___ \\",
+        "    \\ \\ / /| | |_) || | | | | |/ _ \\  | |  | | | | |_) |   __) |",
+        "     \\ V / | |  _ < | | | |_| / ___ \\ | |__| |_| |  __/   / __/",
+        "      \\_/  |_|_| \\_\\|_|  \\___/_/   \\_\\ \\____\\___/|_|     |_____|"
+    };
+    static const WORD shade[] = {
+        FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE | FOREGROUND_INTENSITY,
+        FOREGROUND_GREEN | FOREGROUND_BLUE | FOREGROUND_INTENSITY,
+        FOREGROUND_BLUE | FOREGROUND_INTENSITY,
+        FOREGROUND_BLUE | FOREGROUND_INTENSITY,
+        FOREGROUND_RED | FOREGROUND_INTENSITY
+    };
+    static const char spin[] = {'|', '/', '-', '\\', '+'};
+    int i;
+
+    printf("\n");
+    for (i = 0; i < 5; i++) {
+        menuColor(shade[i]);
+        printf("%s\n", art[i]);
+        if (animate && g_menuConsole) { fflush(stdout); Sleep(35); }
+    }
+    menuColor(FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY);
+    if (animate && g_menuConsole) {
+        for (i = 0; i < 5; i++) {
+            printf("\r                   --==[ %c ]==--  V R  E D I T I O N",
+                   spin[i]);
+            fflush(stdout);
+            Sleep(65);
+        }
+        printf("\n");
+    } else {
+        printf("                   --==[ + ]==--  V R  E D I T I O N\n");
+    }
+    menuColor(FOREGROUND_RED | FOREGROUND_INTENSITY);
+    printf("   -----------------------------------------------------------\n");
+    menuColor(FOREGROUND_GREEN | FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+    printf("   MODE %-6s | GUNS %-3s | AMMO %-3s | LIVES %-3s\n",
+           wantStereo ? "STEREO" : wantWindow ? "WINDOW" : "VR",
+           (g_cfgAkimbo && g_viewAkimbo) ? "TWO" : "ONE",
+           (g_cheatFlags & VC2_CHEAT_AMMO) ? "ON" : "OFF",
+           (g_cheatFlags & VC2_CHEAT_LIVES) ? "ON" : "OFF");
+    menuResetColor();
+}
+
 static int startupMenu(int *wantWindow, int *wantStereo)
 {
-    int page = 0, choice, next;
+    CONSOLE_SCREEN_BUFFER_INFO info;
+    int page = 0, shownPage = -1, choice, next;
+    g_menuConsole = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (GetConsoleScreenBufferInfo(g_menuConsole, &info))
+        g_menuNormalColor = info.wAttributes;
+    else g_menuConsole = NULL;
     menuClearConsole();
     for (;;) {
-        printf("\n"
-               "   __     ___ ____ _____ _   _   _      ____ ___  ____    ____\n"
-               "   \\ \\   / (_)  _ \\_   _| | | | / \\    / ___/ _ \\|  _ \\  |___ \\\n"
-               "    \\ \\ / /| | |_) || | | | | |/ _ \\  | |  | | | | |_) |   __) |\n"
-               "     \\ V / | |  _ < | | | |_| / ___ \\ | |__| |_| |  __/   / __/\n"
-               "      \\_/  |_|_| \\_\\|_|  \\___/_/   \\_\\ \\____\\___/|_|     |_____|\n"
-               "                   --==[ + ]==--  V R  E D I T I O N\n"
-               "   -----------------------------------------------------------\n");
-        if (page == 0)
-            printf("     [1] START GAME\n\n"
-                   "     [2] Cheats                 [3] Display\n"
-                   "     [4] Controls               [5] Advanced\n\n"
-                   "     [0] Quit\n"
-                   "   -----------------------------------------------------------\n"
-                   "   Select > ");
-        else if (page == 1)
-            printf("\n   -- CHEATS -----------------------------------------------\n"
-                   "     [1] Infinite ammo: %s\n     [2] Infinite lives: %s\n"
-                   "\n     [0] Back\n   Select > ",
+        menuHeader(page != shownPage, *wantWindow, *wantStereo);
+        shownPage = page;
+        if (page == 0) {
+            menuColor(FOREGROUND_GREEN | FOREGROUND_INTENSITY);
+            printf("\n     [1] START GAME\n");
+            menuResetColor();
+            printf("\n     [2] Cheats                 [3] Display\n"
+                   "     [4] Controls               [5] Advanced\n\n");
+            menuColor(FOREGROUND_RED | FOREGROUND_INTENSITY);
+            printf("     [0] Quit\n");
+            menuResetColor();
+            printf("   -----------------------------------------------------------\n");
+        } else if (page == 1) {
+            menuColor(FOREGROUND_RED | FOREGROUND_INTENSITY);
+            printf("\n   -- CHEATS -----------------------------------------------\n");
+            menuResetColor();
+            printf("     [1] Infinite ammo: %s\n     [2] Infinite lives: %s\n"
+                   "\n     [0] Back\n",
                    (g_cheatFlags & VC2_CHEAT_AMMO) ? "ON" : "OFF",
                    (g_cheatFlags & VC2_CHEAT_LIVES) ? "ON" : "OFF");
-        else if (page == 2)
-            printf("\n   -- DISPLAY ----------------------------------------------\n"
-                   "     [1] Mode: %s\n     [2] MSAA: %d\n"
+        } else if (page == 2) {
+            menuColor(FOREGROUND_GREEN | FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+            printf("\n   -- DISPLAY ----------------------------------------------\n");
+            menuResetColor();
+            printf("     [1] Mode: %s\n     [2] MSAA: %d\n"
                    "     [3] Resolution scale: %d%%\n     [4] Gamma: %d%%\n"
                    "     [5] Monitor window: %s\n"
-                   "\n     [0] Back\n   Select > ",
+                   "\n     [0] Back\n",
                    *wantStereo ? "Stereo" : *wantWindow ? "Window" : "VR",
                    g_cfgMsaa, g_cfgSuper, g_cfgGamma, g_viewWindow ? "ON" : "OFF");
-        else if (page == 3)
-            printf("\n   -- CONTROLS ---------------------------------------------\n"
-                   "     [1] Two guns: %s\n     [2] Haptics: %s\n"
+        } else if (page == 3) {
+            menuColor(FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+            printf("\n   -- CONTROLS ---------------------------------------------\n");
+            menuResetColor();
+            printf("     [1] Two guns: %s\n     [2] Haptics: %s\n"
                    "     [3] Auto zoom: %s\n     [4] Zoom limit: %d%%\n"
-                   "\n     [0] Back\n   Select > ",
+                   "\n     [0] Back\n",
                    (g_cfgAkimbo && g_viewAkimbo) ? "ON" : "OFF",
                    g_cfgHaptic ? "ON" : "OFF",
                    g_cfgAutoZoom ? "ON" : "OFF", g_cfgZoomX);
-        else
-            printf("\n   -- ADVANCED ---------------------------------------------\n"
-                   "     [1] Launchfix: %s\n     [2] Menu at launch: %s\n"
+        } else {
+            menuColor(FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY);
+            printf("\n   -- ADVANCED ---------------------------------------------\n");
+            menuResetColor();
+            printf("     [1] Launchfix: %s\n     [2] Menu at launch: %s\n"
                    "     [3] Brightness: %d%%\n\n"
                    "     Crosshairs, world scale, 360 passes, gun model:\n"
                    "     edit INI files\n"
-                   "\n     [0] Back\n   Select > ",
+                   "\n     [0] Back\n",
                    g_cfgNoCd ? "ON" : "OFF", g_cfgMenu ? "ON" : "OFF",
                    g_viewTexGain);
+        }
+        menuColor(FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY);
+        printf("   Select > ");
+        menuResetColor();
         fflush(stdout);
         choice = menuReadChoice();
         if (choice == -1) {

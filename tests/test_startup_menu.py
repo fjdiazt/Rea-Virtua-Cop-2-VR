@@ -56,6 +56,8 @@ def main():
         output = launch(exe, choices="2\n1\n0\n3\n0\n0\n")
         assert "Infinite ammo: ON" in output and "Infinite ammo: OFF" in output, output
         assert "Mode: Window" in output, output
+        assert "AMMO ON" in output and "AMMO OFF" in output, output
+        assert "\x1b" not in output, "console colors leaked into redirected output"
         assert "infinite_ammo=0" in vr_ini.read_text().replace(" ", ""), vr_ini.read_text()
         assert list(vr_ini.parent.glob("*.menu-*.bak")), "missing VR INI backup"
 
