@@ -188,6 +188,7 @@ static char g_cfgGameExe[MAX_PATH];   /* [vr] gameexe: start the game ourselves 
 static int  g_cfgSetDevice = 1;       /* [vr] setdevice: write vcop2.ini for them */
 static int g_cfgNoPause = 1;      /* patch the game so losing focus does not pause it */
 static int g_cfgNoCd = 0;         /* [vr] launchfix: in-memory compatibility patches at launch */
+static int g_cfgExitWithGame;     /* close VC2VR when the connected game exits */
 static unsigned g_cheatFlags;     /* per-launch cheats; off unless requested */
 static int g_cfgMenu, g_cfgWindow, g_cfgStereo;
 static int g_viewWindow, g_viewAkimbo, g_viewTexGain = 100;
@@ -233,6 +234,7 @@ static void loadCfg(void)
     g_cfgSetDevice = (int)GetPrivateProfileIntA("vr", "setdevice", 1, path);
     g_cfgNoPause   = (int)GetPrivateProfileIntA("vr", "nopause", 0, path);
     g_cfgNoCd      = (int)GetPrivateProfileIntA("vr", "launchfix", 0, path);
+    g_cfgExitWithGame = (int)GetPrivateProfileIntA("vr", "exitwithgame", 0, path);
     g_cfgMenu      = (int)GetPrivateProfileIntA("vr", "menu", 0, path);
     g_cfgWindow    = (int)GetPrivateProfileIntA("vr", "window", 0, path);
     g_cfgStereo    = (int)GetPrivateProfileIntA("vr", "stereo", 0, path);
@@ -461,6 +463,8 @@ static void pullAtlas(void)
 #include <tlhelp32.h>
 
 static HANDLE g_gameProc;
+static HANDLE g_gameExitProc;           /* kept even if projection reads fail */
+static int    g_gameWatchFailed;
 static DWORD  g_gamePid;
 static DWORD  g_gameFindAt;             /* next tick worth retrying at */
 static float  g_gfxBase;                /* smallest live fx seen = "no zoom" */
@@ -730,6 +734,17 @@ static void gameNoPause(void)
     if (g_gameWnd) PostMessageA(g_gameWnd, WM_ACTIVATEAPP, 1, 0);
 }
 
+static void gameWatch(void)
+{
+    if (!g_cfgExitWithGame || !g_gameProc || g_gameExitProc || g_gameWatchFailed) return;
+    g_gameExitProc = OpenProcess(SYNCHRONIZE, FALSE, g_gamePid);
+    if (!g_gameExitProc) {
+        g_gameWatchFailed = 1;
+        note("exitwithgame: cannot watch game process (error %lu)\n",
+             (unsigned long)GetLastError());
+    }
+}
+
 static void gameProcFind(void)
 {
     HANDLE snap;
@@ -748,12 +763,15 @@ static void gameProcFind(void)
                            ? pe.szExeFile[i] - 32 : pe.szExeFile[i]);
         up[i] = 0;
         if (up[0]=='P'&&up[1]=='P'&&up[2]=='J'&&up[3]=='2'&&up[4]=='D'&&up[5]=='D') {
+            if (g_gameExitProc && pe.th32ProcessID != g_gamePid) continue;
             g_gameProc = OpenProcess(PROCESS_VM_READ | PROCESS_VM_WRITE |
                                      PROCESS_VM_OPERATION, FALSE, pe.th32ProcessID);
             if (!g_gameProc)            /* read-only is still worth having */
                 g_gameProc = OpenProcess(PROCESS_VM_READ, FALSE, pe.th32ProcessID);
             if (g_gameProc) {
+                if (g_gamePid != pe.th32ProcessID) g_gameWatchFailed = 0;
                 g_gamePid = pe.th32ProcessID;
+                gameWatch();
                 note("reading the live projection from %s\n", pe.szExeFile);
                 g_gameWnd = NULL;
                 EnumWindows(focusEnum, (LPARAM)g_gamePid);
@@ -763,6 +781,19 @@ static void gameProcFind(void)
         }
     } while (Process32Next(snap, &pe));
     CloseHandle(snap);
+}
+
+static int gameExited(void)
+{
+    DWORD result;
+    if (!g_cfgExitWithGame || !g_frame) return 0;
+    if (!g_gameExitProc && !g_gameProc) gameProcFind();
+    gameWatch();
+    if (!g_gameExitProc) return 0;
+    result = WaitForSingleObject(g_gameExitProc, 0);
+    if (result != WAIT_OBJECT_0) return 0;
+    note("exitwithgame: game process exited\n");
+    return 1;
 }
 
 /* one read per frame; on any failure fall back to the fov_degrees estimate
@@ -2415,14 +2446,15 @@ static PFN_xrGetInstanceProcAddr xrGIPA;
 #define XRFN(name) static PFN_##name p##name
 XRFN(xrCreateInstance); XRFN(xrDestroyInstance); XRFN(xrGetSystem);
 XRFN(xrGetSystemProperties); XRFN(xrCreateSession); XRFN(xrDestroySession);
-XRFN(xrCreateReferenceSpace); XRFN(xrEnumerateViewConfigurationViews);
-XRFN(xrCreateSwapchain); XRFN(xrEnumerateSwapchainImages);
+XRFN(xrCreateReferenceSpace); XRFN(xrDestroySpace);
+XRFN(xrEnumerateViewConfigurationViews);
+XRFN(xrCreateSwapchain); XRFN(xrDestroySwapchain); XRFN(xrEnumerateSwapchainImages);
 XRFN(xrEnumerateSwapchainFormats);
 XRFN(xrAcquireSwapchainImage); XRFN(xrWaitSwapchainImage); XRFN(xrReleaseSwapchainImage);
 XRFN(xrBeginSession); XRFN(xrEndSession); XRFN(xrWaitFrame); XRFN(xrBeginFrame);
 XRFN(xrEndFrame); XRFN(xrLocateViews); XRFN(xrPollEvent); XRFN(xrResultToString);
 XRFN(xrEnumerateInstanceExtensionProperties);
-XRFN(xrStringToPath); XRFN(xrCreateActionSet); XRFN(xrCreateAction);
+XRFN(xrStringToPath); XRFN(xrCreateActionSet); XRFN(xrDestroyActionSet); XRFN(xrCreateAction);
 XRFN(xrCreateActionSpace); XRFN(xrSuggestInteractionProfileBindings);
 XRFN(xrAttachSessionActionSets); XRFN(xrSyncActions); XRFN(xrApplyHapticFeedback);
 XRFN(xrGetActionStateBoolean); XRFN(xrGetActionStateFloat); XRFN(xrLocateSpace);
@@ -2454,14 +2486,14 @@ static void loadXr(XrInstance inst)
 #define GET(n) do { if (XR_FAILED(xrGIPA(inst, #n, (PFN_xrVoidFunction *)&p##n))) \
                         die("missing OpenXR entry point " #n); } while (0)
     GET(xrGetSystem); GET(xrGetSystemProperties); GET(xrCreateSession);
-    GET(xrDestroySession); GET(xrCreateReferenceSpace);
-    GET(xrEnumerateViewConfigurationViews); GET(xrCreateSwapchain);
+    GET(xrDestroySession); GET(xrCreateReferenceSpace); GET(xrDestroySpace);
+    GET(xrEnumerateViewConfigurationViews); GET(xrCreateSwapchain); GET(xrDestroySwapchain);
     GET(xrEnumerateSwapchainImages); GET(xrEnumerateSwapchainFormats);
     GET(xrAcquireSwapchainImage); GET(xrWaitSwapchainImage);
     GET(xrReleaseSwapchainImage); GET(xrBeginSession); GET(xrEndSession);
     GET(xrWaitFrame); GET(xrBeginFrame); GET(xrEndFrame); GET(xrLocateViews);
     GET(xrPollEvent); GET(xrDestroyInstance); GET(xrResultToString);
-    GET(xrStringToPath); GET(xrCreateActionSet); GET(xrCreateAction);
+    GET(xrStringToPath); GET(xrCreateActionSet); GET(xrDestroyActionSet); GET(xrCreateAction);
     GET(xrCreateActionSpace); GET(xrSuggestInteractionProfileBindings);
     GET(xrAttachSessionActionSets); GET(xrSyncActions); GET(xrApplyHapticFeedback);
     GET(xrGetActionStateBoolean); GET(xrGetActionStateFloat); GET(xrLocateSpace);
@@ -3281,6 +3313,8 @@ static int runVR(void)
         const XrCompositionLayerBaseHeader *layers[1];
         uint32_t got = 0;
 
+        if (gameExited()) goto cleanup;
+
         for (;;) {
             ZeroMemory(&ev, sizeof(ev));
             ev.type = XR_TYPE_EVENT_DATA_BUFFER;
@@ -3300,7 +3334,7 @@ static int runVR(void)
                 } else if (state == XR_SESSION_STATE_EXITING ||
                            state == XR_SESSION_STATE_LOSS_PENDING) {
                     note("session ended\n");
-                    return 0;
+                    goto cleanup;
                 }
             }
         }
@@ -3467,6 +3501,32 @@ static int runVR(void)
         pxrEndFrame(session, &fei);
         gameFocus();                    /* we are live; the game can have it back */
     }
+cleanup:
+    if (running && state != XR_SESSION_STATE_EXITING &&
+        state != XR_SESSION_STATE_LOSS_PENDING)
+        pxrEndSession(session);
+    ID3D11DeviceContext_ClearState(g_ctx);
+    for (i = 0; i < 2; i++) {
+        uint32_t k;
+        for (k = 0; k < eye[i].imgCount; k++)
+            if (eye[i].rtv[k]) ID3D11RenderTargetView_Release(eye[i].rtv[k]);
+        free(eye[i].rtv);
+        if (eye[i].dsv) ID3D11DepthStencilView_Release(eye[i].dsv);
+        if (eye[i].msRtv) ID3D11RenderTargetView_Release(eye[i].msRtv);
+        if (eye[i].msTex) ID3D11Texture2D_Release(eye[i].msTex);
+        free(eye[i].imgs);
+        if (eye[i].sc) pxrDestroySwapchain(eye[i].sc);
+        if (g_aimSpace[i]) pxrDestroySpace(g_aimSpace[i]);
+    }
+    if (space) pxrDestroySpace(space);
+    if (g_actSet) pxrDestroyActionSet(g_actSet);
+    if (session) pxrDestroySession(session);
+    if (inst) pxrDestroyInstance(inst);
+    free(fmts);
+    if (pick) IDXGIAdapter1_Release(pick);
+    if (fac) IDXGIFactory1_Release(fac);
+    FreeLibrary(loader);
+    return 0;
 }
 
 /* ------------------------------------------------------- plain window mode */
@@ -3575,6 +3635,7 @@ static int runWindow(void)
         float scale, aspect = (float)W / (float)H, fovY = 1.2f;
         char title[200];
 
+        if (gameExited()) return 0;
         while (PeekMessageA(&msg, NULL, 0, 0, PM_REMOVE)) {
             if (msg.message == WM_QUIT) return 0;
             TranslateMessage(&msg);
@@ -3734,6 +3795,7 @@ static int runStereo(void)
         char title[220];
         int i;
 
+        if (gameExited()) return 0;
         while (PeekMessageA(&msg, NULL, 0, 0, PM_REMOVE)) {
             if (msg.message == WM_QUIT) return 0;
             TranslateMessage(&msg);
@@ -4096,12 +4158,12 @@ static int startupMenu(int *wantWindow, int *wantStereo)
             printf("\n   -- ADVANCED ---------------------------------------------\n");
             menuResetColor();
             printf("     [1] Launchfix: %s\n     [2] Menu at launch: %s\n"
-                   "     [3] Brightness: %d%%\n\n"
+                   "     [3] Brightness: %d%%\n     [4] Exit with game: %s\n\n"
                    "     Crosshairs, world scale, 360 passes, gun model:\n"
                    "     edit INI files\n"
                    "\n     [0] Back\n",
                    g_cfgNoCd ? "ON" : "OFF", g_cfgMenu ? "ON" : "OFF",
-                   g_viewTexGain);
+                   g_viewTexGain, g_cfgExitWithGame ? "ON" : "OFF");
         }
         menuColor(FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY);
         printf("   Select > ");
@@ -4196,13 +4258,18 @@ static int startupMenu(int *wantWindow, int *wantStereo)
                        menuReadNumber("Brightness", 25, 400, &next) &&
                        menuSave(g_viewIniPath, g_viewBackup, "view", "texgain", next))
                 g_viewTexGain = next;
+            else if (choice == 4) {
+                next = !g_cfgExitWithGame;
+                if (menuSave(g_vrIniPath, g_vrBackup, "vr", "exitwithgame", next))
+                    g_cfgExitWithGame = next;
+            }
         }
     }
 }
 
 int main(int argc, char **argv)
 {
-    int wantWindow, wantStereo, wantMenu, cliWindow = 0, cliStereo = 0, i;
+    int wantWindow, wantStereo, wantMenu, cliWindow = 0, cliStereo = 0, i, result;
     loadCfg();
     wantWindow = g_cfgWindow;
     wantStereo = g_cfgStereo;
@@ -4213,6 +4280,7 @@ int main(int argc, char **argv)
         if (!lstrcmpiA(argv[i], "--menu")) wantMenu = 1;
         if (!lstrcmpiA(argv[i], "--infinite-ammo")) g_cheatFlags |= VC2_CHEAT_AMMO;
         if (!lstrcmpiA(argv[i], "--infinite-lives")) g_cheatFlags |= VC2_CHEAT_LIVES;
+        if (!lstrcmpiA(argv[i], "--exit-with-game")) g_cfgExitWithGame = 1;
     }
     if (cliWindow || cliStereo) { wantWindow = cliWindow; wantStereo = cliStereo; }
     if (wantMenu) {
@@ -4240,6 +4308,10 @@ int main(int argc, char **argv)
             "       and make sure share = 1 in HGL_VIEW.ini");
     note("connected to the game\n");
 
-    if (wantStereo) return runStereo();
-    return wantWindow ? runWindow() : runVR();
+    result = wantStereo ? runStereo() : wantWindow ? runWindow() : runVR();
+    if (g_gameProc) CloseHandle(g_gameProc);
+    if (g_gameExitProc) CloseHandle(g_gameExitProc);
+    if (g_frame) UnmapViewOfFile(g_frame);
+    if (g_map) CloseHandle(g_map);
+    return result;
 }

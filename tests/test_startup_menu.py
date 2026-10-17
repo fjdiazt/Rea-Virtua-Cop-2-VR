@@ -85,6 +85,24 @@ def main():
         assert next(vr_ini.parent.glob("*.menu-*.bak")).read_bytes() == vr_before
         assert next(view_ini.parent.glob("*.menu-*.bak")).read_bytes() == view_before
 
+        exe, vr_ini, _ = setup(
+            root, "exit-toggle", source, "menu = 1\nexitwithgame = 0\n",
+        )
+        before = vr_ini.read_bytes()
+        output = launch(exe, choices="5\n4\n0\n0\n")
+        assert "Exit with game: OFF" in output and "Exit with game: ON" in output
+        assert "exitwithgame=1" in vr_ini.read_text().replace(" ", "")
+        assert next(vr_ini.parent.glob("*.menu-*.bak")).read_bytes() == before
+
+        exe, vr_ini, _ = setup(root, "exit-cli", source, "menu = 0\nexitwithgame = 0\n")
+        before = vr_ini.read_bytes()
+        output = launch(
+            exe, ("--menu", "--exit-with-game", "--infinite-ammo"),
+            "5\n0\n2\n0\n0\n",
+        )
+        assert "Exit with game: ON" in output and "Infinite ammo: ON" in output
+        assert vr_ini.read_bytes() == before, "CLI-only choices were saved"
+
     print("startup menu checks passed")
 
 
