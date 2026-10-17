@@ -186,6 +186,7 @@ static char g_cfgGameExe[MAX_PATH];   /* [vr] gameexe: start the game ourselves 
 static int  g_cfgSetDevice = 1;       /* [vr] setdevice: write vcop2.ini for them */
 static int g_cfgNoPause = 1;      /* patch the game so losing focus does not pause it */
 static int g_cfgNoCd = 0;         /* [vr] launchfix: in-memory compatibility patches at launch */
+static unsigned g_cheatFlags;     /* per-launch cheats; off unless requested */
 static int g_cfgScope;            /* 1 = optic on the gun, 0 = magnify the whole view */
 static int g_cfgScopeDeg = 12;    /* angular radius of the disc, degrees */
 static int g_cfgScopeDist = 25;   /* how far out the head-locked disc hangs, m */
@@ -293,6 +294,28 @@ static int pullFrame(void)
 {
     unsigned a, b, n, i;
     if (!g_frame) return 0;
+    if (g_cheatFlags && g_frame->version == VC2_SHARE_VERSION) {
+        static DWORD firstSent;
+        static int reported;
+        DWORD now = GetTickCount();
+        unsigned status;
+        g_frame->cheat_flags = g_cheatFlags;
+        MemoryBarrier();
+        g_frame->cheat_heartbeat = now;
+        if (!firstSent) firstSent = now;
+        status = g_frame->cheat_status;
+        if (!reported && status == VC2_CHEAT_UNSUPPORTED) {
+            note("cheats: unsupported game executable; no counters changed\n");
+            reported = 1;
+        } else if (!reported && (status & g_cheatFlags) == g_cheatFlags) {
+            note("cheats: ready (ammo %u, lives %u)\n",
+                 !!(g_cheatFlags & VC2_CHEAT_AMMO), !!(g_cheatFlags & VC2_CHEAT_LIVES));
+            reported = 1;
+        } else if (!reported && now - firstSent > 2000) {
+            note("cheats: no response from HGL_VIEW.DLL; update both mod binaries\n");
+            reported = 1;
+        }
+    }
     for (i = 0; i < 8; i++) {
         a = g_frame->seq;
         if (a & 1u) continue;
@@ -566,29 +589,52 @@ static void gameLaunch(void)
     if (CreateProcessA(g_cfgGameExe, NULL, NULL, NULL, FALSE, CREATE_SUSPENDED, NULL,
                        dir[0] ? dir : NULL, &si, &pi)) {
         note("launch: started %s\n", g_cfgGameExe);
-        /* The disc check, 0x0040E4B0. The stock exe looks for the CD before
-         * the first frame and, finding none, goes on into a state the
-         * renderer dies in (the title screen blit calls through a slot that
-         * was never filled). The well-known no-CD patch replaces the check
-         * with "mov [0x52B8B8], 2 ; mov eax, 1 ; ret" - sixteen bytes. Do
-         * the same in the suspended process, before its first instruction,
-         * and nothing on disk changes. Only when the sixteen bytes are the
-         * stock ones; a patched exe is left alone. */
+        /* Bypass the CD check only on a verified game layout. The EU/PAL build
+         * stores the drive index at 0x52B8D8; 0x52B8B8 is a render float there.
+         * Both variants are patched in memory before the first instruction. */
         if (g_cfgNoCd) {
             static const BYTE sig[16] = { 0x56,0x8B,0x35,0x30,0x74,0x80,0x00,0xE8,
                                           0x64,0xFF,0xFF,0xFF,0x8B,0x15,0xA0,0xB8 };
             static const BYTE fix[16] = { 0xC7,0x05,0xB8,0xB8,0x52,0x00,0x02,0x00,
                                           0x00,0x00,0xB8,0x01,0x00,0x00,0x00,0xC3 };
-            BYTE cur[16]; SIZE_T got = 0; DWORD old = 0;
+            static const BYTE euSig[16] = { 0x56,0x8B,0x35,0x30,0x74,0x80,0x00,0xE8,
+                                            0x64,0xFF,0xFF,0xFF,0x8B,0x15,0xC0,0xB8 };
+            static const BYTE euFix[16] = { 0xC7,0x05,0xD8,0xB8,0x52,0x00,0x02,0x00,
+                                            0x00,0x00,0xB8,0x01,0x00,0x00,0x00,0xC3 };
+            static const BYTE euWrite[] = { 0xA3,0xD8,0xB8,0x52,0x00 };
+            static const BYTE euRead[]  = { 0xA1,0xD8,0xB8,0x52,0x00 };
+            BYTE cur[16], check[5]; SIZE_T got = 0; DWORD old = 0;
+            const BYTE *patch = NULL;
+            int eu = 0;
             LPVOID at = (LPVOID)(ULONG_PTR)0x0040E4B0u;
-            if (ReadProcessMemory(pi.hProcess, at, cur, 16, &got) && got == 16 &&
-                memcmp(cur, sig, 16) == 0) {
-                if (VirtualProtectEx(pi.hProcess, at, 16, PAGE_EXECUTE_READWRITE, &old) &&
-                    WriteProcessMemory(pi.hProcess, at, fix, 16, &got) && got == 16) {
-                    VirtualProtectEx(pi.hProcess, at, 16, old, &old);
-                    note("launchfix: applied\n");
+            if (!ReadProcessMemory(pi.hProcess, at, cur, sizeof(cur), &got) || got != sizeof(cur)) {
+                note("launchfix: cannot read game code\n");
+            } else if (memcmp(cur, sig, sizeof(sig)) == 0) {
+                patch = fix;
+            } else if (memcmp(cur, euSig, sizeof(euSig)) == 0 &&
+                       ReadProcessMemory(pi.hProcess, (LPCVOID)(ULONG_PTR)0x0040E4C8u,
+                                         check, sizeof(check), &got) && got == sizeof(check) &&
+                       memcmp(check, euWrite, sizeof(check)) == 0 &&
+                       ReadProcessMemory(pi.hProcess, (LPCVOID)(ULONG_PTR)0x00406096u,
+                                         check, sizeof(check), &got) && got == sizeof(check) &&
+                       memcmp(check, euRead, sizeof(check)) == 0) {
+                patch = euFix;
+                eu = 1;
+            } else {
+                note("launchfix: unsupported game code; no patch\n");
+            }
+            if (patch) {
+                if (!VirtualProtectEx(pi.hProcess, at, sizeof(cur), PAGE_EXECUTE_READWRITE, &old)) {
+                    note("launchfix: protection change refused (error %lu)\n",
+                         (unsigned long)GetLastError());
                 } else {
-                    note("launchfix: write refused (error %lu)\n", (unsigned long)GetLastError());
+                    BOOL wrote = WriteProcessMemory(pi.hProcess, at, patch, sizeof(cur), &got) &&
+                                 got == sizeof(cur);
+                    DWORD error = wrote ? 0 : GetLastError();
+                    if (wrote) FlushInstructionCache(pi.hProcess, at, sizeof(cur));
+                    VirtualProtectEx(pi.hProcess, at, sizeof(cur), old, &old);
+                    if (wrote) note("launchfix: applied%s\n", eu ? " (EU/PAL)" : "");
+                    else note("launchfix: write refused (error %lu)\n", (unsigned long)error);
                 }
             }
         }
@@ -2853,8 +2899,8 @@ static int handleControllers(XrSession session, XrSpace space, XrTime when,
         unsigned buttons2 = 0;
         g_frame->akimbo = 1;
         if (fire[oh].isActive && fire[oh].currentState) buttons2 |= VC2_BTN_FIRE;
-        /* PLAYER 2 HAS TO PRESS START HIMSELF. 0x0040D300 only draws the second
-         * crosshair when byte [0x004CF1E5] == 2 - "player 2 is in the game" -
+        /* PLAYER 2 HAS TO PRESS START HIMSELF. The game only draws the second
+         * crosshair when its player state is 2 - "player 2 is in the game" -
          * and nothing sets that until P2's own Start arrives on his own device.
          * Gun 2 used to be trigger-only "so its thumb does not fight the menus",
          * which is precisely why akimbo never started: the second player was
@@ -3746,6 +3792,8 @@ int main(int argc, char **argv)
     for (i = 1; i < argc; i++) {
         if (!lstrcmpiA(argv[i], "--window")) wantWindow = 1;
         if (!lstrcmpiA(argv[i], "--stereo")) wantStereo = 1;
+        if (!lstrcmpiA(argv[i], "--infinite-ammo")) g_cheatFlags |= VC2_CHEAT_AMMO;
+        if (!lstrcmpiA(argv[i], "--infinite-lives")) g_cheatFlags |= VC2_CHEAT_LIVES;
     }
 
     loadCfg();
