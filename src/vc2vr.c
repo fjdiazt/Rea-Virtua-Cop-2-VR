@@ -3901,9 +3901,23 @@ static int menuReadNumber(const char *label, int min, int max, int *result)
     return 1;
 }
 
+static void menuClearConsole(void)
+{
+    HANDLE output = GetStdHandle(STD_OUTPUT_HANDLE);
+    CONSOLE_SCREEN_BUFFER_INFO info;
+    COORD origin = {0, 0};
+    DWORD written, cells;
+    if (!GetConsoleScreenBufferInfo(output, &info)) return;
+    cells = (DWORD)info.dwSize.X * (DWORD)info.dwSize.Y;
+    if (!FillConsoleOutputCharacterA(output, ' ', cells, origin, &written)) return;
+    FillConsoleOutputAttribute(output, info.wAttributes, cells, origin, &written);
+    SetConsoleCursorPosition(output, origin);
+}
+
 static int startupMenu(int *wantWindow, int *wantStereo)
 {
     int page = 0, choice, next;
+    menuClearConsole();
     for (;;) {
         if (page == 0)
             printf("\n"
@@ -3957,6 +3971,7 @@ static int startupMenu(int *wantWindow, int *wantStereo)
             note("menu: input unavailable; starting with configured choices\n");
             return 1;
         }
+        menuClearConsole();
         if (page == 0) {
             if (choice == 1) return 1;
             if (choice == 0) return 0;
