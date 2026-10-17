@@ -44,6 +44,19 @@ mod in there too, and run everything from `PROJECT`.
 
 `VC2VR.exe --window` renders to a flat window instead of the headset, which
 tells a game-side problem from a VR-runtime one.
+`VC2VR.exe --stereo` shows both eyes side by side on the desktop.
+
+`VC2VR.exe --menu` opens a console menu before the game starts. Set `menu = 1`
+in `VC2VR.ini` to show it on normal launches too. The menu groups cheats,
+display, controls and advanced settings. Each changed setting is saved
+immediately to `VC2VR.ini` or `HGL_VIEW.ini`, with a timestamped backup beside
+the first changed INI. Quitting the menu does not undo saved choices.
+Close `PPJ2DD.EXE` before changing game-side settings in the menu.
+
+All command-line choices also have `VC2VR.ini` defaults: `window`, `stereo`,
+`infinite_ammo`, and `infinite_lives`. `--menu` has `menu`. Command-line flags
+enable their choice for that run; the menu can change the result and save it.
+The `window` key in `HGL_VIEW.ini` controls the separate monitor view.
 
 ## Optional cheats
 
