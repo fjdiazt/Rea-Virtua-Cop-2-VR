@@ -290,6 +290,8 @@ static void loadCfg(void)
 static unsigned  g_scrSeqSeen;
 static int       g_scrFresh;        /* new pixels waiting to be uploaded */
 static int       g_scrHave;         /* capture is alive at all */
+static DWORD     g_cheatFirstSent;
+static int       g_cheatReported;
 
 static int openShare(void)
 {
@@ -310,25 +312,23 @@ static int pullFrame(void)
     unsigned a, b, n, i;
     if (!g_frame) return 0;
     if (g_cheatFlags && g_frame->version == VC2_SHARE_VERSION) {
-        static DWORD firstSent;
-        static int reported;
         DWORD now = GetTickCount();
         unsigned status;
         g_frame->cheat_flags = g_cheatFlags;
         MemoryBarrier();
         g_frame->cheat_heartbeat = now;
-        if (!firstSent) firstSent = now;
+        if (!g_cheatFirstSent) g_cheatFirstSent = now;
         status = g_frame->cheat_status;
-        if (!reported && status == VC2_CHEAT_UNSUPPORTED) {
+        if (!g_cheatReported && status == VC2_CHEAT_UNSUPPORTED) {
             note("cheats: unsupported game executable; no counters changed\n");
-            reported = 1;
-        } else if (!reported && (status & g_cheatFlags) == g_cheatFlags) {
+            g_cheatReported = 1;
+        } else if (!g_cheatReported && (status & g_cheatFlags) == g_cheatFlags) {
             note("cheats: ready (ammo %u, lives %u)\n",
                  !!(g_cheatFlags & VC2_CHEAT_AMMO), !!(g_cheatFlags & VC2_CHEAT_LIVES));
-            reported = 1;
-        } else if (!reported && now - firstSent > 2000) {
+            g_cheatReported = 1;
+        } else if (!g_cheatReported && now - g_cheatFirstSent > 2000) {
             note("cheats: no response from HGL_VIEW.DLL; update both mod binaries\n");
-            reported = 1;
+            g_cheatReported = 1;
         }
     }
     for (i = 0; i < 8; i++) {
@@ -604,7 +604,7 @@ static void gameLaunch(void)
     STARTUPINFOA si;
     PROCESS_INFORMATION pi;
     char dir[MAX_PATH], *slash;
-    if (g_launchTried || g_gameProc) return;
+    if (g_launchTried || g_gameProc || g_gameExitProc) return;
     gameSeek();
     if (!g_cfgGameExe[0]) return;
     g_launchTried = 1;
@@ -671,7 +671,8 @@ static void gameLaunch(void)
         }
         ResumeThread(pi.hThread);
         CloseHandle(pi.hThread);
-        CloseHandle(pi.hProcess);
+        g_gamePid = pi.dwProcessId;
+        g_gameExitProc = pi.hProcess;
     } else {
         note("launch: cannot start %s (error %lu)\n",
              g_cfgGameExe, (unsigned long)GetLastError());
@@ -736,11 +737,11 @@ static void gameNoPause(void)
 
 static void gameWatch(void)
 {
-    if (!g_cfgExitWithGame || !g_gameProc || g_gameExitProc || g_gameWatchFailed) return;
+    if (!g_gameProc || g_gameExitProc || g_gameWatchFailed) return;
     g_gameExitProc = OpenProcess(SYNCHRONIZE, FALSE, g_gamePid);
     if (!g_gameExitProc) {
         g_gameWatchFailed = 1;
-        note("exitwithgame: cannot watch game process (error %lu)\n",
+        note("game: cannot watch process exit (error %lu)\n",
              (unsigned long)GetLastError());
     }
 }
@@ -786,13 +787,13 @@ static void gameProcFind(void)
 static int gameExited(void)
 {
     DWORD result;
-    if (!g_cfgExitWithGame || !g_frame) return 0;
-    if (!g_gameExitProc && !g_gameProc) gameProcFind();
+    if (!g_frame) return 0;
+    if (!g_gameProc) gameProcFind();
     gameWatch();
     if (!g_gameExitProc) return 0;
     result = WaitForSingleObject(g_gameExitProc, 0);
     if (result != WAIT_OBJECT_0) return 0;
-    note("exitwithgame: game process exited\n");
+    note("game: process exited\n");
     return 1;
 }
 
@@ -2199,6 +2200,23 @@ static int   g_scopeW, g_scopeH;
 static float g_scopeVP[16];         /* view*proj of the scope pass, local space */
 static int   g_scopeDrawn;          /* this frame has a scope image to show   */
 
+static void releaseGraphics(void)
+{
+#define RELEASE(p) do { if (p) { IUnknown_Release((IUnknown *)(p)); (p) = NULL; } } while (0)
+    if (!g_ctx) return;
+    ID3D11DeviceContext_ClearState(g_ctx);
+    RELEASE(g_scopeSRV); RELEASE(g_scopeRtv); RELEASE(g_scopeDsv); RELEASE(g_scopeTex);
+    RELEASE(g_scopeVB); RELEASE(g_cbScope); RELEASE(g_vsScope); RELEASE(g_psScope);
+    RELEASE(g_gunVB); RELEASE(g_gunSRV); RELEASE(g_vsGun); RELEASE(g_psGun); RELEASE(g_dssGun);
+    RELEASE(g_atlSRV); RELEASE(g_atlTex); RELEASE(g_scrSRV); RELEASE(g_scrTex);
+    RELEASE(g_scrVB); RELEASE(g_vsTex); RELEASE(g_psTex); RELEASE(g_ilTex);
+    RELEASE(g_samp); RELEASE(g_cbRes); RELEASE(g_blendAdd);
+    RELEASE(g_ovVB); RELEASE(g_vb); RELEASE(g_cb); RELEASE(g_vs); RELEASE(g_ps);
+    RELEASE(g_psOv); RELEASE(g_il); RELEASE(g_rs); RELEASE(g_dss); RELEASE(g_dssUI);
+    RELEASE(g_ctx); RELEASE(g_dev);
+#undef RELEASE
+}
+
 /* The disc used to find its texel by pushing its own world position through
  * the scope camera. That reads as principled and is a no-op: the scope sits at
  * the head and the disc hangs on the head's forward axis, so a disc point at
@@ -2506,6 +2524,7 @@ static XrActionSet g_actSet;
 static XrAction    g_actAim, g_actFire, g_actStart, g_actBack, g_actToggle, g_actGrip, g_actZoom, g_actHaptic;
 static volatile float g_zoomLevel = 1.0f;   /* 1 = no zoom; held stick raises it */
 static int g_autoOn;                        /* the game is in a zoom moment  */
+static int g_resetControls;
 static XrPath      g_handPath[2];               /* 0 = left, 1 = right */
 static XrSpace     g_aimSpace[2];
 static int         g_activeHand = 1;            /* the light-gun hand */
@@ -2776,13 +2795,20 @@ static int handleControllers(XrSession session, XrSpace space, XrTime when,
     XrActionStateBoolean fire[2], bstart, bback, btoggle;
     XrActionStateFloat grip;
     XrSpaceLocation loc;
-    static int prevToggle, prevGrip;
+    static int prevToggle, prevGrip, zoomOn, zoomHeld;
+    static unsigned prevButtons, prev2;
     int recentre = 0, h, hand;
     unsigned buttons = 0;
     float p[3], d[3], fwd[3] = { 0, 0, -1 };
     float hitLocal[3];
     int haveHit = 0;
     float sx = 320.0f, sy = 240.0f;
+
+    if (g_resetControls) {
+        prevToggle = prevGrip = zoomOn = zoomHeld = 0;
+        prevButtons = prev2 = 0;
+        g_resetControls = 0;
+    }
 
     ZeroMemory(&act, sizeof(act));
     act.actionSet = g_actSet;
@@ -2823,7 +2849,6 @@ static int handleControllers(XrSession session, XrSpace space, XrTime when,
      * settles in about a second) so the world swells instead of jumping. */
     {
         XrActionStateFloat z; float push = 0.0f, targetZoom; int hh, pressed;
-        static int zoomOn, zoomHeld;
         for (hh = 0; hh < 2; hh++) {
             ZeroMemory(&gi, sizeof(gi)); ZeroMemory(&z, sizeof(z));
             gi.type = XR_TYPE_ACTION_STATE_GET_INFO;
@@ -2911,7 +2936,6 @@ static int handleControllers(XrSession session, XrSpace space, XrTime when,
     } else if (bstart.isActive && bstart.currentState) buttons |= VC2_BTN_START;
     if (bback.isActive && bback.currentState)           buttons |= VC2_BTN_BACK;
     {   /* edges drive the gun animation; the game gets the levels as before */
-        static unsigned prevButtons;
         if ((buttons & VC2_BTN_FIRE)  && !(prevButtons & VC2_BTN_FIRE))  g_gunFireAt = GetTickCount();
         if ((buttons & VC2_BTN_START) && !(prevButtons & VC2_BTN_START)) g_gunReloadAt = GetTickCount();
         prevButtons = buttons;
@@ -2991,7 +3015,7 @@ static int handleControllers(XrSession session, XrSpace space, XrTime when,
             g_gun2Hit[0] = hit2[0]; g_gun2Hit[1] = hit2[1]; g_gun2Hit[2] = hit2[2];
             g_gun2Origin[0] = p2[0]; g_gun2Origin[1] = p2[1]; g_gun2Origin[2] = p2[2];
             g_gun2Fire = buttons2;
-            {   static unsigned prev2;
+            {
                 if ((buttons2 & VC2_BTN_FIRE)  && !(prev2 & VC2_BTN_FIRE))  g_gun2FireAt   = GetTickCount();
                 if ((buttons2 & VC2_BTN_START) && !(prev2 & VC2_BTN_START)) g_gun2ReloadAt = GetTickCount();
                 prev2 = buttons2;
@@ -3120,7 +3144,9 @@ static int runVR(void)
     IDXGIAdapter1 *ad = NULL, *pick = NULL;
     int64_t *fmts = NULL;
     DXGI_FORMAT chosen = DXGI_FORMAT_R8G8B8A8_UNORM;
-    int running = 0, haveOrigin = 0;
+    int running = 0, haveOrigin = 0, gameEnded = 0;
+    XrQuaternionf smooth[2] = { 0 };
+    int haveSmooth = 0;
     int eyeMsaa[2] = { 1, 1 };
     float originYaw = 0.0f, ox = 0, oy = 0, oz = 0;
     D3D_FEATURE_LEVEL fl;
@@ -3313,7 +3339,7 @@ static int runVR(void)
         const XrCompositionLayerBaseHeader *layers[1];
         uint32_t got = 0;
 
-        if (gameExited()) goto cleanup;
+        if (gameExited()) { gameEnded = 1; goto cleanup; }
 
         for (;;) {
             ZeroMemory(&ev, sizeof(ev));
@@ -3412,8 +3438,6 @@ static int runVR(void)
                      * ORIENTATION that feeds the view (position is left alone,
                      * so the room does not swim) and the wobble goes with it.
                      * At zoom 1 the filter is bypassed entirely. */
-                    static XrQuaternionf smooth[2];
-                    static int haveSmooth;
                     XrPosef pv = views[i].pose;
                     if (!g_cfgScope && g_zoomLevel > 1.001f && g_cfgZoomSmooth > 0) {
                         float k = (float)g_cfgZoomSmooth / 100.0f;
@@ -3517,16 +3541,19 @@ cleanup:
         free(eye[i].imgs);
         if (eye[i].sc) pxrDestroySwapchain(eye[i].sc);
         if (g_aimSpace[i]) pxrDestroySpace(g_aimSpace[i]);
+        g_aimSpace[i] = XR_NULL_HANDLE;
     }
     if (space) pxrDestroySpace(space);
     if (g_actSet) pxrDestroyActionSet(g_actSet);
+    g_actSet = XR_NULL_HANDLE;
     if (session) pxrDestroySession(session);
     if (inst) pxrDestroyInstance(inst);
     free(fmts);
     if (pick) IDXGIAdapter1_Release(pick);
     if (fac) IDXGIFactory1_Release(fac);
     FreeLibrary(loader);
-    return 0;
+    releaseGraphics();
+    return gameEnded;
 }
 
 /* ------------------------------------------------------- plain window mode */
@@ -3581,6 +3608,7 @@ static int runWindow(void)
     D3D_FEATURE_LEVEL fl;
     MSG msg;
     int W = 1280, H = 720;
+    int gameEnded = 0;
 
     ZeroMemory(&wc, sizeof(wc));
     wc.lpfnWndProc = wp;
@@ -3635,9 +3663,9 @@ static int runWindow(void)
         float scale, aspect = (float)W / (float)H, fovY = 1.2f;
         char title[200];
 
-        if (gameExited()) return 0;
+        if (gameExited()) { gameEnded = 1; goto cleanup; }
         while (PeekMessageA(&msg, NULL, 0, 0, PM_REMOVE)) {
-            if (msg.message == WM_QUIT) return 0;
+            if (msg.message == WM_QUIT) goto cleanup;
             TranslateMessage(&msg);
             DispatchMessageA(&msg);
         }
@@ -3707,6 +3735,15 @@ static int runWindow(void)
                   g_lastFrame, g_localCount / 3, (int)g_unitsPerMetre);
         SetWindowTextA(hwnd, title);
     }
+cleanup:
+    ID3D11DeviceContext_ClearState(g_ctx);
+    ID3D11RenderTargetView_Release(rtv);
+    ID3D11DepthStencilView_Release(dsv);
+    IDXGISwapChain_Release(swap);
+    DestroyWindow(hwnd);
+    while (PeekMessageA(&msg, NULL, WM_QUIT, WM_QUIT, PM_REMOVE)) ;
+    releaseGraphics();
+    return gameEnded;
 }
 
 /* --------------------------------------------------------------- stereo test
@@ -3735,6 +3772,7 @@ static int runStereo(void)
     D3D_FEATURE_LEVEL fl;
     MSG msg;
     int W = 1600, H = 600, half = 800;
+    int gameEnded = 0;
     int haveOrigin = 0;
     float originYaw = 0.0f, ox = 0.0f, oy = 0.0f, oz = 0.0f;
     float ipd = 0.064f;
@@ -3795,9 +3833,9 @@ static int runStereo(void)
         char title[220];
         int i;
 
-        if (gameExited()) return 0;
+        if (gameExited()) { gameEnded = 1; goto cleanup; }
         while (PeekMessageA(&msg, NULL, 0, 0, PM_REMOVE)) {
-            if (msg.message == WM_QUIT) return 0;
+            if (msg.message == WM_QUIT) goto cleanup;
             TranslateMessage(&msg);
             DispatchMessageA(&msg);
         }
@@ -3873,6 +3911,15 @@ static int runStereo(void)
                   (int)(ipd * 1000.0f));
         SetWindowTextA(hwnd, title);
     }
+cleanup:
+    ID3D11DeviceContext_ClearState(g_ctx);
+    ID3D11RenderTargetView_Release(rtv);
+    ID3D11DepthStencilView_Release(dsv);
+    IDXGISwapChain_Release(swap);
+    DestroyWindow(hwnd);
+    while (PeekMessageA(&msg, NULL, WM_QUIT, WM_QUIT, PM_REMOVE)) ;
+    releaseGraphics();
+    return gameEnded;
 }
 
 static int menuBackup(const char *path, char *backup)
@@ -4092,7 +4139,7 @@ static void menuHeader(int animate, int wantWindow, int wantStereo)
     menuResetColor();
 }
 
-static int startupMenu(int *wantWindow, int *wantStereo)
+static int startupMenu(int *wantWindow, int *wantStereo, int firstLaunch)
 {
     CONSOLE_SCREEN_BUFFER_INFO info;
     int page = 0, firstDraw = 1, choice, next;
@@ -4173,8 +4220,9 @@ static int startupMenu(int *wantWindow, int *wantStereo)
         choice = menuReadChoice();
         if (choice == -1) {
             menuStopStar();
-            note("menu: input unavailable; starting with configured choices\n");
-            return 1;
+            note("menu: input unavailable; %s\n",
+                 firstLaunch ? "starting with configured choices" : "closing");
+            return firstLaunch;
         }
         AcquireSRWLockExclusive(&g_menuDrawLock);
         g_menuStarVisible = 0;
@@ -4287,31 +4335,46 @@ int main(int argc, char **argv)
         gameSeek();
         gameProcFind();
         menuViewCfg();
-        if (!startupMenu(&wantWindow, &wantStereo)) return 0;
+        if (!startupMenu(&wantWindow, &wantStereo, 1)) return 0;
     }
-    note("VC2VR - Virtua Cop 2 in a headset\n\n");
-    /* Start the game BEFORE the wait, not from the frame loop. gameLaunch sat
-     * in gameProjRead, which only runs once we are already connected - so with
-     * nothing running it waited five minutes for a game it was itself supposed
-     * to start, and then gave up. Look for the process first, so an already
-     * running game is joined instead of started twice. */
-    gameProcFind();
-    gameLaunch();
-    note("waiting for the game...\n");
-    for (i = 0; i < 600; i++) {
-        if (openShare()) break;
-        Sleep(500);
-    }
-    if (!g_frame)
-        die("the game is not publishing anything.\n"
-            "       Start Virtua Cop 2, choose \"Direct 3D + 3D view\" in Device Settings [F7],\n"
-            "       and make sure share = 1 in HGL_VIEW.ini");
-    note("connected to the game\n");
+    for (;;) {
+        note("VC2VR - Virtua Cop 2 in a headset\n\n");
+        /* Start the game BEFORE the wait, not from the frame loop. gameLaunch sat
+         * in gameProjRead, which only runs once we are already connected - so with
+         * nothing running it waited five minutes for a game it was itself supposed
+         * to start, and then gave up. Look for the process first, so an already
+         * running game is joined instead of started twice. */
+        gameProcFind();
+        gameLaunch();
+        note("waiting for the game...\n");
+        for (i = 0; i < 600; i++) {
+            if (openShare()) break;
+            Sleep(500);
+        }
+        if (!g_frame)
+            die("the game is not publishing anything.\n"
+                "       Start Virtua Cop 2, choose \"Direct 3D + 3D view\" in Device Settings [F7],\n"
+                "       and make sure share = 1 in HGL_VIEW.ini");
+        note("connected to the game\n");
 
-    result = wantStereo ? runStereo() : wantWindow ? runWindow() : runVR();
-    if (g_gameProc) CloseHandle(g_gameProc);
-    if (g_gameExitProc) CloseHandle(g_gameExitProc);
-    if (g_frame) UnmapViewOfFile(g_frame);
-    if (g_map) CloseHandle(g_map);
-    return result;
+        result = wantStereo ? runStereo() : wantWindow ? runWindow() : runVR();
+        if (g_gameProc) CloseHandle(g_gameProc);
+        if (g_gameExitProc) CloseHandle(g_gameExitProc);
+        if (g_frame) UnmapViewOfFile(g_frame);
+        if (g_map) CloseHandle(g_map);
+        g_gameProc = g_gameExitProc = g_map = NULL;
+        g_frame = NULL;
+        if (result != 1 || g_cfgExitWithGame) return 0;
+        g_gamePid = g_gameFindAt = 0;
+        g_gameWatchFailed = g_launchTried = g_focusDone = g_noPauseState = 0;
+        g_gameWnd = NULL;
+        g_gfxBase = 0.0f;
+        g_projLive = g_localCount = g_scrSeqSeen = g_atlSeqSeen = 0;
+        g_scrHave = g_scrFresh = g_atlFresh = 0;
+        g_zoomLevel = 1.0f;
+        g_autoOn = g_gunValid = g_gun2Valid = 0;
+        g_cheatFirstSent = 0; g_cheatReported = 0; g_resetControls = 1;
+        menuViewCfg();
+        if (!startupMenu(&wantWindow, &wantStereo, 0)) return 0;
+    }
 }
