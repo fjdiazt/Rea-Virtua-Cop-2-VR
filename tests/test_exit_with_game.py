@@ -20,7 +20,20 @@ def wait_for_log(path, text, process, seconds=12):
     raise AssertionError(f"timed out waiting for {text!r}:\n{output}")
 
 
-def run_case(root, name, vc2vr, fake_game, enabled, args=(), launch=False, menu=False):
+def wait_for_count(path, text, count, process, seconds=12):
+    end = time.monotonic() + seconds
+    while time.monotonic() < end:
+        output = path.read_text(errors="replace") if path.exists() else ""
+        if output.count(text) >= count:
+            return output
+        if process.poll() is not None:
+            raise AssertionError(f"process exited before {count} * {text!r}:\n{output}")
+        time.sleep(0.05)
+    raise AssertionError(f"timed out waiting for {count} * {text!r}:\n{output}")
+
+
+def run_case(root, name, vc2vr, fake_game, enabled, args=(), launch=False,
+             menu=False, restart=False, no_input=False):
     folder = root / name
     vr, project = folder / "VR", folder / "PROJECT"
     vr.mkdir(parents=True)
@@ -37,6 +50,7 @@ def run_case(root, name, vc2vr, fake_game, enabled, args=(), launch=False, menu=
     fake = None
     wrapper = None
     log = folder / "wrapper.log"
+    mode_log = "stereo test" if "--stereo" in args else "window mode"
     try:
         if not launch:
             fake = subprocess.Popen([str(game)], cwd=project, stdin=subprocess.DEVNULL,
@@ -44,23 +58,40 @@ def run_case(root, name, vc2vr, fake_game, enabled, args=(), launch=False, menu=
                                     creationflags=flags)
         with log.open("w") as output:
             wrapper = subprocess.Popen([str(exe), *args], cwd=vr,
-                                       stdin=subprocess.PIPE if menu else subprocess.DEVNULL,
+                                       stdin=subprocess.DEVNULL if no_input else subprocess.PIPE,
                                        stdout=output,
                                        stderr=subprocess.STDOUT, creationflags=flags)
             if menu:
                 wrapper.stdin.write(b"5\n4\n0\n1\n")
-                wrapper.stdin.close()
+                wrapper.stdin.flush()
             wait_for_log(log, "reading the live projection", wrapper)
-            wait_for_log(log, "window mode", wrapper)
+            wait_for_log(log, mode_log, wrapper)
             (project / "exit.now").touch()
             if fake:
                 assert fake.wait(timeout=5) == 0, "fake game failed"
             if enabled or menu or "--exit-with-game" in args:
                 assert wrapper.wait(timeout=5) == 0, log.read_text(errors="replace")
-                assert "exitwithgame: game process exited" in log.read_text(errors="replace")
+                assert "game: process exited" in log.read_text(errors="replace")
             else:
-                time.sleep(1)
-                assert wrapper.poll() is None, "disabled option closed VC2VR"
+                wait_for_count(log, "START GAME", 1, wrapper)
+                if not no_input:
+                    assert wrapper.poll() is None, "VC2VR closed before return menu"
+                if restart:
+                    assert launch, "restart needs a configured gameexe"
+                    (project / "exit.now").unlink()
+                    wrapper.stdin.write(b"1\n")
+                    wrapper.stdin.flush()
+                    wait_for_count(log, "launch: started", 2, wrapper)
+                    wait_for_count(log, "connected to the game", 2, wrapper)
+                    wait_for_count(log, mode_log, 2, wrapper)
+                    (project / "exit.now").touch()
+                    wait_for_count(log, "START GAME", 2, wrapper)
+                if no_input:
+                    assert wrapper.wait(timeout=5) == 0, log.read_text(errors="replace")
+                else:
+                    wrapper.stdin.write(b"0\n")
+                    wrapper.stdin.flush()
+                    assert wrapper.wait(timeout=5) == 0, log.read_text(errors="replace")
     finally:
         (project / "exit.now").touch()
         if fake and fake.poll() is None:
@@ -97,6 +128,10 @@ def main():
         run_case(root, "attached", vc2vr, fake_game, True)
         run_case(root, "menu-toggle", vc2vr, fake_game, False, menu=True)
         run_case(root, "disabled", vc2vr, fake_game, False)
+        run_case(root, "restart", vc2vr, fake_game, False, launch=True, restart=True)
+        run_case(root, "restart-stereo", vc2vr, fake_game, False,
+                 args=("--stereo",), launch=True, restart=True)
+        run_case(root, "no-input", vc2vr, fake_game, False, launch=True, no_input=True)
         run_case(root, "cli-cheats", vc2vr, fake_game, False,
                  args=("--exit-with-game", "--infinite-ammo"))
 

@@ -60,7 +60,9 @@ The `window` key in `HGL_VIEW.ini` controls the separate monitor view.
 
 Advanced > Exit with game, `[vr] exitwithgame = 1`, or `--exit-with-game` closes
 VC2VR after the connected `PPJ2DD.EXE` exits. This works for games started by
-VC2VR and games already running. It is off by default; the command-line flag
+VC2VR and games already running. With `exitwithgame = 0` (the default), VC2VR
+starts normally, then shows its console menu when the game closes. Choose
+Start Game to launch it again, or Quit to close VC2VR. The command-line flag
 can be combined with cheat flags.
 
 ## Optional cheats
