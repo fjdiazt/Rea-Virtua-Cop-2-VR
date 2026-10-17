@@ -32,13 +32,26 @@ level up. Create a `PROJECT` folder inside the game folder, copy every file
 from the game folder into it (files only, `BIN` stays where it is), copy the
 mod in there too, and run everything from `PROJECT`.
 
+### Optional music without a mounted disc
+
+The game's `SE` folder holds sound effects; its music normally plays from the
+CD. If you already have the CD audio as `Track02.wav`, `Track03.wav`, and so on,
+put those files in `MUSIC` beside `PROJECT`. Copy `audio\winmm.dll` beside
+`PPJ2DD.EXE` (usually `PROJECT\winmm.dll`), even if `VC2VR.exe` is in a
+separate `VR` folder. The DLL runs inside the game and reads the sibling
+`MUSIC` folder. Without a `PROJECT` folder, use `Music` beside `PPJ2DD.EXE`.
+
+Set `launchfix = 1` in `VC2VR.ini` when starting a recognized game executable
+without a mounted disc. The bypass changes only the running process. To use CD
+audio again, remove the optional `winmm.dll` and mount the disc.
+
 ## Running
 
 1. Start your VR runtime.
 2. Run `VC2VR.exe`. It starts the game, switches it to the mod's renderer and
    to windowed mode (`vcop2.ini`), brings the game window to the front and
-   connects. Full-screen mode does not work with the mod. Keep the game's
-   disc image mounted - the music comes from it.
+   connects. Full-screen mode does not work with the mod. Music comes from a
+   mounted disc or the optional file wrapper above.
 3. Put the headset on facing your monitor - the first head pose becomes the
    camera. Squeeze the grip to recentre at any time.
 
@@ -111,7 +124,7 @@ the original input path.
 `launchfix = 1` optionally bypasses the game's CD check when `VC2VR.exe` starts
 a recognized `PPJ2DD.EXE`, including the EU/PAL 1.0.0.2 code layout. The patch
 is in memory only; starting `PPJ2DD.EXE` directly skips it. Leave this off when
-the disc is mounted, and keep the disc mounted for music.
+the disc is mounted. File music needs the optional `winmm.dll` above.
 
 ## Rendering glitches
 
